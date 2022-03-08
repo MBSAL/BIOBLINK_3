@@ -848,3 +848,6 @@ TURN_ON_ROUTINE()
 print "\n waitevent \n"
 WAITEVENT 
 print "\n after final waitevent, now in interactive mode \n"
+
+// test commit 
+print "\n ok"

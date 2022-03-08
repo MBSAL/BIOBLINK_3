@@ -1,0 +1,131 @@
+
+// Copyright (c) 2020, Laird Connectivity
+//
+// Permission to use, copy, modify, and/or distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+// SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+// IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+//
+// SPDX-License-Identifier:ISC
+//
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// +++++                                                                      ++
+// +++++  When UwTerminal downloads the app it will store it as a filenname   ++
+// +++++  which consists of all characters up to the first . and excluding it ++
+// +++++                                                                      ++
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
+// Enter some description here.
+//
+// When saving this file, give it a filename which has the form  xx.yyyyyy.sb
+// where xx is a 1,2 or 3 letter mnemonic of the app so that you can launch it
+// from UwTerminal with minimal typing and make yyyy as descriptive as you like
+// as long as the total filename does not exceed the operating systems limit
+//
+//******************************************************************************
+
+//******************************************************************************
+// Definitions
+//******************************************************************************
+//Pinout Definitions---------------------------------------------
+#define HAPTIC_PWM			//13	// IO, PWM; out 
+#define BUCK_ON			13	//17	// IO; out - LED 1
+#define CURR_SET_PWM			//19	// IO, PWM; out 
+#define TX_EN			14	//23	// IO; out - LED 2
+#define MOD				//27	// IO, FREQ; out 
+#define RX_EN			15	//28	// IO; out - LED 3
+#define BLINK			11	//29	// IO, interrupt; in - Button 1
+#define ENV_ADC				//10	// ADC; in
+#define BAT_ADC				//12	// ADC; in
+#define PBSTAT				//36	// IO; in
+#define CHRG				//38	// IO; in
+#define BLK_THRES_PWM			//39	// IO, PWM; out
+
+//FSM states 
+#define OFF	0
+#define ON 1
+#define BLE_CONNECT+PAIR 2
+#define INITIALIZATION 3
+#define CALIBRATION 4
+#define CALIBRATION_PASS 5
+#Define CALIBRATION_FAIL 6
+#Define HP_Mode 7
+#Define LP_Mode 8 
+
+//Advert efintions
+#define ADVERT_INTERVAL 200 //advertising inteval ms
+#Define ADVERT_TIMEOUT 60000
+# 
+
+//******************************************************************************
+// Include other files
+//******************************************************************************
+
+//******************************************************************************
+// Global Variable Declarations
+//******************************************************************************
+
+dim rc      //Result code
+dim CURRENT_STATE as integer
+CURRENT_STATE = 1; 
+
+//******************************************************************************
+// Function and Subroutine definitions
+//******************************************************************************
+
+//******************************************************************************
+// Handler definitions
+//******************************************************************************
+
+//******************************************************************************
+// Equivalent to main() in C
+//******************************************************************************
+SELECT CURRENT_STATE
+CASE OFF
+
+CASE ON
+
+CASE BLE_CONNECT+PAIR
+//advertise for connection
+//if advertise timer expires then go to off state
+//if connection established, go to initialization
+CASE INITIALIZATION
+//IO outputs
+//any ncessary timers
+//start devices (ADC,TX,RX, etc.)
+//Obtain config interval from user device
+//Run Facee PRxomiity Detection
+//If face detected (return from face prox function) move to calibration, otherwise reepeat face detection
+
+CASE CALIBRATION
+//sweep CURR_SET_PWM for decent signal (?) Clarify with Shane
+//Calibration Function --> If 0, fail, if 1 pass, switch state appropriately
+CASE CALIBRATION_PASS
+//Clarify with Shane
+// Will move to HP Mode
+CASE CALIBRATION_FAIL
+//error message
+//Fail_Count+=1
+//If Fail_Count >=3 then state is off
+//If Fail_Count < 3 then state is back to initialization
+CASE HP_MODE
+//Blink time increase
+//if Blink_Time >= Config_Interval then Haptic_Feedback()
+//If Battery_Timer>=2mins IdentifyCharge() // how to do identify Charge?
+//Package_Data() +Send_Data()
+CASE LP_MODE
+//wip
+ENDSELECT
+
+//------------------------------------------------------------------------------
+// Wait for a synchronous event.
+// An application can have multiple <WaitEvent> statements
+//------------------------------------------------------------------------------
+waitevent

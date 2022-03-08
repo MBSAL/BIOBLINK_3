@@ -1,0 +1,268 @@
+//Pinout Definitions---------------------------------------------
+#define HAPTIC			    13  	// 13, IO, out. Formally HAPTIC_PWM. ACTIVE LOW
+#define BUCK_ON				40	// 17, IO; out - LED 1
+#define CURR_SET_PWM		31 // pin 31 temporarily      //11	// 19, IO, PWM; out 
+#define TX_EN				13 //tempoarily LED1 (13)     //31	// 23, IO; out - LED 2
+#define MOD				    14	// 27, IO, FREQ; out 
+#define RX_EN				17	// 28, IO; out - LED 3
+//#define BLINK				12	// 29, IO, interrupt; in - Button 1
+#define ENV_ADC				3 	// 10, ADC; in
+//#define BAT_ADC				31	// 12, ADC; in
+#define PBSTAT				28	// 36, IO; in
+#define CHRG				30	// 38, IO; in
+#define BLK_THRES_PWM		29	// 39, IO, PWM; out
+#define SLOPE_P             27    // 40, IO, in
+#define SLOPE_N             26    // 45, IO, in
+
+#define BTN_1 11 //button 1
+#define BTN_2  12 //button 2
+#define BTN_3 	24 //button 3 --> represent power button
+
+#define DIGITAL_IN       1
+#define DIGITAL_OUT      2
+#define ANALOG_IN        3
+#define LOW              0
+#define HIGH             1
+#define PWM              2
+#define FREQ             3
+
+//Main FSM State Definitions
+
+#define TURN_OFF           0
+#define TURN_ON            1
+#define BLE_CONNECT        2
+#define PROXIMITY_DETECT   3
+#define CALIBRATION        4
+#define CAL_PASS           5
+#define CAL_FAIL           6
+#define MODE_LP            7
+#define MODE_HP            8
+#define CHANGE_MODE        9
+
+//Global Variables
+
+dim rc      //Result code
+DIM CURRENT_STATE as integer
+CURRENT_STATE = 9   //default state is TURN_ON on powerup
+
+DIM HW_Debug
+HW_Debug = 0        //Flag to bypass any BLE comms and calibration. When '1' Go straight to MODE_LP with default values
+
+DIM Cal_Fail_Count  //failure counter.So it dosen't endlessly 'calibrate' if the proximity detection produces false positive/
+Cal_Fail_Count = 0
+
+DIM BLINK_TIME 
+BLINK_TIME = 0
+
+DIM TARGET_BLINK_INTERVAL 
+TARGET_BLINK_INTERVAL = 0
+
+dim start_tick
+dim elapse_ms
+dim adc
+dim V_BAT as FLOAT
+//Functions--------------------------------------------------------------
+
+sub AssertRC(byval rc as integer,byval tag as integer)
+  if (rc!=0) then
+    print "Failed with ";integer.h' rc;" at tag ";tag;"\n"
+  endif
+endsub
+
+sub DELAY_MS(BYVAL DELAY_TIME AS INTEGER)   //delay N milliseconds.
+
+    dim START_TIME 
+    START_TIME = GETTICKCOUNT()  //Get initial tick in ms
+	//print "\n"; START_TIME; "\n"
+    dim END_TIME 
+    END_TIME = START_TIME + DELAY_TIME      //Add delay to current tick
+
+    WHILE GETTICKCOUNT() < END_TIME            //Waste power until END_TIME reached
+		//package
+		//send data
+		//house keeping related items
+    ENDWHILE 
+	//print "\n leave time: "; GETTICKCOUNT(); "\n"
+endsub
+
+sub HAPTICS(BYVAL PATTERN_TYPE AS INTEGER)   //input an integer to select the haptic pattern
+
+    SELECT PATTERN_TYPE
+
+        CASE 1     
+            GPIOWRITE(HAPTIC,0)       //HAPTIC is active low!!!!
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(400)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(400)
+            GPIOWRITE(HAPTIC,1)
+            PRINT "\n Haptics 1 finished"
+
+        CASE 2
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(400)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(400)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(400)
+            GPIOWRITE(HAPTIC,1)
+            PRINT "\n Haptics 2 finished"
+
+            //add cases as required
+                 
+        CASE ELSE     
+            PRINT "\n Not a valid haptics pattern"
+
+    ENDSELECT
+
+endsub
+
+sub OPTICAL_TX(BYVAL CURRENT_SET_DC AS INTEGER)  //Starts optical TX. Input 0 to turn off. 
+
+    dim TX_LIMIT
+    TX_LIMIT = 100  //HARDCODE TO MAXIMUM EXPERIMENTAL PWM DUTYCYCLE THAT GIVES MAX ALLOWED CURRENT
+
+    if (CURRENT_SET_DC <= TX_LIMIT)&(CURRENT_SET_DC != 0) then
+
+        GPIOWRITE(CURR_SET_PWM,CURRENT_SET_DC)
+        GPIOWRITE(TX_EN,HIGH)  //enable FE TX opamps + oscilator
+        PRINT "\n TX ENABLED, DC SET: "; CURRENT_SET_DC
+
+    elseif (CURRENT_SET_DC > TX_LIMIT)&(CURRENT_SET_DC != 0) then
+
+        GPIOWRITE(CURR_SET_PWM,TX_LIMIT)
+        GPIOWRITE(TX_EN,HIGH)  //enable FE TX opamps + oscilator
+        PRINT "\n TX_LIMIT DC EXCEDED, set to max: "; TX_LIMIT
+
+    elseif CURRENT_SET_DC == 0 then         //turn TX off
+
+        GPIOWRITE(CURR_SET_PWM,0)
+        GPIOWRITE(TX_EN,LOW)  //disable FE TX opamps + oscilator
+        PRINT "\n TX SHUTDOWN"
+
+    endif
+
+endsub
+
+sub IO_Config()
+
+    DIM temp
+	DIM nfreq : nfreq = 10000
+	DIM nresolution : nresolution = 100
+    temp = GPIOSETFUNC(CURR_SET_PWM,DIGITAL_OUT,PWM)
+    temp = GPIOCONFIGPWM(nfreq,nresolution)                      //10kHz 1:100 resolution current set PWM
+    //To set duty cycle -> change TX current: GPIOWRITE(CURR_SET_PWM, 0 to N) where N = 1 to 100 or 10000?  
+
+  //  temp = GPIOSETFUNC(HAPTIC,DIGITAL_OUT,HIGH)          //HAPTICS will just be on/off not PWM. Active low.
+	temp = GPIOSETFUNC(BTN_1, DIGITAL_IN, 2)
+	
+//    temp = GPIOSETFUNC(BUCK_ON,DIGITAL_OUT,HIGH)         
+    temp = GPIOSETFUNC(TX_EN,DIGITAL_OUT,LOW) 
+ //   temp = GPIOSETFUNC(RX_EN,DIGITAL_OUT,LOW)
+//    temp = GPIOSETFUNC(MOD,DIGITAL_OUT,LOW)              //unused with FE v2.0, set as low digital output.
+ //   temp = GPIOSETFUNC(BLK_THRES_PWM,DIGITAL_OUT,LOW)    //unused with FE v2.0, set as low digital output.
+
+ //   temp = GPIOSETFUNC(BLINK,DIGITAL_IN,0)               //unused with FE v2.0, set as digital input.
+ //   temp = GPIOSETFUNC(PBSTAT,DIGITAL_IN,0)
+ //   temp = GPIOSETFUNC(CHRG,DIGITAL_IN,0)
+  //  temp = GPIOSETFUNC(SLOPE_P,DIGITAL_IN,0)           //Add deep sleep wake?
+  //  temp = GPIOSETFUNC(SLOPE_N,DIGITAL_IN,0)           
+    
+//    temp = GPIOSETFUNCEX(ENV_ADC,ANALOG_IN,"\15\0A\0A")          
+ //   temp = GPIOSETFUNCEX(BAT_ADC,ANALOG_IN,"\14\0C\28")
+
+    //temp = GPIOSETFUNCEX(31,ANALOG_IN,"\16\0A\0A")
+    PRINT "\n IO Configured"
+    
+    // Set ADC scaling so max analog voltage * Scaling < 0.6V (ADC reference)
+    //0x16 1/6 scaling
+    //0x15 1/5 scaling
+    //0x14 1/4 scaling
+    //0x13 1/3 scaling
+    //0x12 1/2 scaling
+    //0x11 1/1 scaling (Unity)
+    //0x21 2/1 scaling
+    //0x41 4/1 scaling
+    
+    //0x08 8-bit ADC resolution
+    //0x0A 10-bit ADC resolution
+    //0x0C 12-bit ADC resolution
+
+    //0x03 3 microseconds Acquisition time
+    //0x05 5 microseconds
+    //0x0A 10 microseconds
+    //0x0F 15 microseconds
+    //0x14 20 microseconds
+    //0x28 40 microseconds
+    
+endsub 
+
+
+function BLE_Config(BYVAL BLE_TimeOut AS INTEGER)
+
+    TimerStart(0,180000,0)   //3 min search timer
+
+    //configure BLE, check for saved MAC
+    //if the timer times out, return a 0. BLE_TimeOut = 0 
+	//exit state stop and reset timer
+
+endfunc 1 
+
+function Prox_Detect(BYVAL PROX_TimeOut AS INTEGER)
+
+    TimerStart(1,60000,0)   //1 min promimity detection timeout timer
+
+    //Look at DC values of ENV_IN with ADC
+    //if the timer times out, return a 0. PROX_TimeOut = 0 
+	//exit state stop and reset timer
+    
+endfunc 1 
+
+
+
+//Main Program-----------------------------------------------------------
+
+IO_Config()
+//HAPTICS(1)
+//DELAY_MS(2000)
+//HAPTICS(2)
+//DELAY_MS(2000)
+start_tick = GETTICKCOUNT()
+//DO 
+//adc = GPIOREAD(31)
+elapse_ms = GetTickSince(start_tick)
+//print "\n ADC Value read: "; adc
+OPTICAL_TX(50)
+//DELAY_MS(1000)
+//OPTICAL_TX(10)
+//DELAY_MS(1000)
+//OPTICAL_TX(120)
+//DELAY_MS(1000)
+//OPTICAL_TX(0)
+//DELAY_MS(1000)
+
+   // V_BAT = (adc) / (1024*((1/6)/0.6)) * 1000
+
+  //  PRINT "\n V_BAT:"; V_BAT; " mV \n"
+    
+//DOWHILE GPIOREAD(11) == 1 //elapse_ms < 15 
+
+
+//HP MODE
+// 
+
+
+WAITEVENT 

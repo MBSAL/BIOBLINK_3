@@ -115,6 +115,7 @@ DIM HW_Debug : HW_Debug = 0        //Flag to bypass any BLE comms and calibratio
 DIM MIN_TIME_BTWN_BLINKS : MIN_TIME_BTWN_BLINKS = 2000 //2000 for testing with the devkit, 500 in practice  (?Confirm with Shanes graph)
 dim Current_set_tx_default : Current_set_tx_default = 30
 dim FEEDBACK_COUNT : FEEDBACK_COUNT = 0 //count of feedback instances in respective mode 
+dim SLOPE_FLAG : SLOPE_FLAG = 0
 
 //CALIBRATION MODE GLOBAL VARIABLES 
 DIM Cal_Fail_Count : Cal_Fail_Count = 0 //failure counter.So it dosen't endlessly 'calibrate' if the proximity detection produces false positive/
@@ -150,8 +151,8 @@ dim hcharBatADC ///gatt server battery adc characteristic handle
 dim hcharEnvADC ///gatt server envelope adc characteristic handle
 dim hcharCurrentState ///gatt server Current State characteristic handle
 dim hcharTargetInterval //gat server target interval state handle (value default is to be 10s)
-
 dim hcharHFeedbackCount //gat server Feedback instances count 
+dim hcharSlopes
 dim nTxBufs //number of free tx buffers for notification
 dim nCtx
 
@@ -216,7 +217,7 @@ sub IO_Config()
     temp = GPIOSETFUNC(PBSTAT,DIGITAL_IN,2) //note for the devkit, used 2, originally written as 0 though
     temp = GPIOSETFUNC(CHRG,DIGITAL_IN,0)
     temp = GPIOSETFUNC(SLOPE_P,DIGITAL_IN,2) //changed 0 to 2 for devkit purposes           //Add deep sleep wake?
-    temp = GPIOSETFUNC(SLOPE_N,DIGITAL_IN,0)           
+    temp = GPIOSETFUNC(SLOPE_N,DIGITAL_IN,2) //changed 0 to 2 for devkit purposes        
     
     temp = GPIOSETFUNCEX(ENV_ADC,ANALOG_IN,"\15\0A\0A")          
     temp = GPIOSETFUNCEX(BAT_ADC,ANALOG_IN,"\16\0A\0A")//"\14\0C\28")
@@ -390,7 +391,7 @@ Sub Create_Char_Current_State()
     AssertRC(rc,0604)
 endsub
 
-Sub Create_Char_Slope_P()
+Sub Create_Char_Slope()
     dim dta$ : dta$="\00"
     dim rc2,rc3
 	dim chprop
@@ -401,11 +402,12 @@ Sub Create_Char_Slope_P()
 	dim namespace : namespace = 0x01      //Bluetooth SIG
 	dim namespacedesc : namespacedesc = 0x0000
     //Initialise GATT Server batt read / notify LEDs Characteristic - Read/Write
+
 	chprop = BLE_CHAR_PROPERTIES_READ | BLE_CHAR_PROPERTIES_INDICATE //replace 0x22
-	rc=BleCharNew(chprop, BleHandleUuidSibling(hBseUuid,(UUID_CURRENT_STATE)), BleAttrMetaData(1,0,2,1,rc2), BleAttrMetaData(1,1,1,1,rc3),0)
+	rc=BleCharNew(chprop, BleHandleUuidSibling(hBseUuid,(UUID_BLINK_SLOPES)), BleAttrMetaData(1,0,2,1,rc2), BleAttrMetaData(1,1,1,1,rc3),0)
     rc = BleCharDescPrstnFrmt(format,exponent,unit,namespace,namespacedesc)
 	AssertRC(rc,155) : AssertRC(rc2,1552)
-    rc=BleCharCommit(hSvc,dta$,hcharCurrentState)
+    rc=BleCharCommit(hSvc,dta$,hcharSlopes)
     AssertRC(rc,0604)
 endsub
 
@@ -461,7 +463,9 @@ Sub CreateSvc()
 	Create_Char_Current_State()
 	Create_Char_Feedback_Count()
 	Create_Char_ENV_ADC()
+    Create_Char_Slope()
 	Create_Char_Target_Interval()
+  
     //Commit service to the GATT table
     rc=BleServiceCommit(hSvc)  
 EndSub
@@ -500,6 +504,7 @@ Sub OUTPUT_STATE(BYVAL STATE AS INTEGER)
 	rc = BleEncode8(value$,CURRENT_STATE,0)
 	rc = BleCharValueIndicate(hcharCurrentState,value$)
 	print "\n CURRENT STATE BLE VALUE: ";value$;"\n" 
+    
 endsub
 
 
@@ -645,8 +650,8 @@ function TMR_3_BAT_ADC_HNDL()
     dim V_BAT_NORMALIZED as FLOAT : V_BAT_NORMALIZED = (V_BAT) / (V_BAT_MAX)*100
     dim V_BAT_NORMALIZED_INT : V_BAT_NORMALIZED_INT =  ROUND(V_BAT_NORMALIZED)
     
-    print "\n V_BAT_NORMALIZED:"; V_BAT_NORMALIZED; "\n"
-    print "\n V_BAT_NORMALIZED INT:"; V_BAT_NORMALIZED_INT; "\n"
+   // print "\n V_BAT_NORMALIZED:"; V_BAT_NORMALIZED; "\n"
+   // print "\n V_BAT_NORMALIZED INT:"; V_BAT_NORMALIZED_INT; "\n"
     
     IF V_BAT_NORMALIZED_INT > 100 THEN
         V_BAT_NORMALIZED_INT = 100
@@ -659,12 +664,12 @@ function TMR_3_BAT_ADC_HNDL()
 //rc = BleCharCommit(hSvc,value$,hcharBatADC)
 	if nTxBufs > 0 then
 		rc = BleCharValueIndicate(hcharBatADC,value$)
-		print "\n ADC value"; adc;"\n"
-        print "V_BAT:";V_BAT;"\n"
+	//	print "\n ADC value"; adc;"\n"
+    //    print "V_BAT:";V_BAT;"\n"
 	
-        dim x
-        rc = BleDecodeS8(value$,x,0)
-        print "\n V_BAT_NORMALIZE DECODED: "; x; "\n"
+      //  dim x
+      //  rc = BleDecodeS8(value$,x,0)
+    //    print "\n V_BAT_NORMALIZE DECODED: "; x; "\n"
 		
 		
 	//	print "\nFree space in ad report: "; BleAdvRptGetSpace(adRpt$); " bytes"
@@ -785,20 +790,41 @@ function TMR_0_BLINK_INTERVAL_EXCEEDED_HNDL() //Blink Interval exceeded Timer in
 
 endfunc 1
 
-function OP_MODE_BLINK_HNDL() //Blink Detected
+sub CHAR_SLOPE_FLAG_UPDATE()
+    dim value$ as string
+	rc = BleEncode8(value$,SLOPE_FLAG,0)
+    if nTxBufs > 0 then
+		rc = BleCharValueIndicate(hcharSlopes,value$)
+        print "\n updated slope flag \n"
+		nTxBufs = nTxBufs-1
+	endif
+
+//	    rc = BleCharValueIndicate(hcharSlopes,value$)
+    
+endsub
+
+function SLOPE_P_BLINK_HNDL() //Blink Detected on Slope P
 
 	if (CURRENT_STATE == MODE_LP & ((GETTICKCOUNT() - LP_LAST_BLINK_TIME) > MIN_TIME_BTWN_BLINKS)) THEN
 		LP_LAST_BLINK_TIME = GETTICKCOUNT()
+        SLOPE_FLAG = 1
 		TimerCancel(0) //reset blink interval timer
 		TimerStart (0,TARGET_BLINK_INTERVAL,1)
 		print "\n Blink detected LP Mode \n"
 	ENDIF
     if (CURRENT_STATE == MODE_HP & ((GETTICKCOUNT() - CURR_BLINK) > MIN_TIME_BTWN_BLINKS)) THEN
 		CURR_BLINK = GETTICKCOUNT()
+        SLOPE_FLAG = 1
 		TimerCancel(0) //reset blink interval timer
 		TimerStart (0,TARGET_BLINK_INTERVAL,1)
 		print "\n Blink detected HP Mode \n"
 	ENDIF
+    CHAR_SLOPE_FLAG_UPDATE()
+endfunc 1
+
+function SLOPE_N_BLINK_HNDL() //Slope N deteccted
+    SLOPE_FLAG = 0
+    CHAR_SLOPE_FLAG_UPDATE()
 endfunc 1
 
 function TMR_4_HNDLR_HP_MODE_ENV_ADC()
@@ -935,8 +961,8 @@ rc = gpiobindevent(1,SLOPE_P,1)             //binds event to gpiochannel1 for wh
 rc = gpiobindevent(0,SLOPE_N,1)
 
 onevent evgpiochan2 		call CHANGE_MODE_HNDL      //Detects when button 3 is pressed or released and calls the function
-onevent evgpiochan1 		call OP_MODE_BLINK_HNDL
-//onevent evgpiochan0         call 
+onevent evgpiochan1 		call SLOPE_P_BLINK_HNDL
+onevent evgpiochan0         call SLOPE_N_BLINK_HNDL
 ONEVENT EVBLE_ADV_TIMEOUT 	CALL HNDLRBLEADVTIMEOUT
 OnEvent EvDiscon     		call HndlrDiscon
 OnEvent EvCharHvc    		call HndlrCharHvc 

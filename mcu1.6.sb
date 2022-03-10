@@ -9,7 +9,7 @@
 #define MOD				    14	// 27, IO, FREQ; out 
 #define RX_EN				15	//LED3 // 28, IO; out - LED 3
 #define BLINK				12	// 29, IO, interrupt; in - Button 1
-#define ENV_ADC				27//31//31 //3 	// 10, ADC; in
+#define ENV_ADC				31//31//31 //3 	// 10, ADC; in
 #define BAT_ADC				31//27	// 12, ADC; in
 #define PBSTAT				24//28 'use 24 for button 3 for devkit purposes //28	// 36, IO; in
 #define CHRG				30	// 38, IO; in
@@ -17,6 +17,7 @@
 #define SLOPE_P             11 // use button 1 for now to represent blink//27    // 40, IO, in
 #define SLOPE_N             12 //using button 2 for slope n//26    // 45, IO, in
 
+//SIGNAL TYPE DEFINITIONS
 #define DIGITAL_IN       1
 #define DIGITAL_OUT      2
 #define ANALOG_IN        3
@@ -38,6 +39,7 @@
 #define MODE_HP            8
 #define CHANGE_MODE        9
 
+
 //BLUETOOTH DEFINITIONS
 //Advertising Parameter definitions
 #define ADV_TIMEOUT		   120000 //ms - how long before advertising timesout if no pair
@@ -45,6 +47,7 @@
 #define ADV_APPEARANCE     0 //might need to be 1?
 #define DEVICENAME			"Laird BL653 Bioblink"
 #define APPEARANCE         448 //no idea waht this is , just copied from bps>blood.presure.custom. Took value as 448 for eye glasses 
+
 //Set BLE_DISCOVERABILITY_NONE if whitelist is enabled in BleAdvertStart()
 //as the 4.0 spec says if whitelist is enabled then discoverability is not allowed
 #define BLE_DISCOVERABILITY_NONE                    0
@@ -74,8 +77,8 @@
 #define UUID_HAPTIC_FEEDBACK_COUNT					0x2030 //x
 #define UUID_CURRENT_STATE							0x2031 //x
 #define UUID_ENV_ADC								0x2032 //x
-#define UUID_BLINK_SLOPES							0x2033 //
-#define UUID_TARGET_INTERVAL						0x2035 //
+#define UUID_BLINK_SLOPES							0x2033 //x
+#define UUID_TARGET_INTERVAL						0x2035 //x
 
 //BLE EVENT MSG IDs
 #define BLE_EVBLEMSGID_CONNECT                      0   //msgCtx = connection handle
@@ -103,28 +106,34 @@
 
 
 
-
 //-----------------------GLOBAL VARIABLES--------------------------
 
 
 //GENERAL GLOBAL VARIABLES
-dim SAMPLE_INTERVAL : SAMPLE_INTERVAL = 10 // 1/SAMPLING_RATE
-dim rc      //Result code
-DIM CURRENT_STATE as integer : CURRENT_STATE = 0   //default state is TURN_ON on powerup
+dim SAMPLE_INTERVAL : SAMPLE_INTERVAL = 10 // 1/SAMPLING_RATE, used when finding ENV_ADC Value
+dim rc  //Result code
+DIM CURRENT_STATE as integer : CURRENT_STATE = 0   //State Machine Variable
 DIM HW_Debug : HW_Debug = 0        //Flag to bypass any BLE comms and calibration. When '1' Go straight to MODE_LP with default values
-DIM MIN_TIME_BTWN_BLINKS : MIN_TIME_BTWN_BLINKS = 2000 //2000 for testing with the devkit, 500 in practice  (?Confirm with Shanes graph)
-dim Current_set_tx_default : Current_set_tx_default = 30
+DIM MIN_TIME_BTWN_BLINKS : MIN_TIME_BTWN_BLINKS = 500 //2000 for testing with the devkit, 500 in practice  (?Confirm with Shanes graph)
+//dim Current_set_tx_default : Current_set_tx_default = 30 
 dim FEEDBACK_COUNT : FEEDBACK_COUNT = 0 //count of feedback instances in respective mode 
-dim SLOPE_FLAG : SLOPE_FLAG = 0
+dim SLOPE_FLAG : SLOPE_FLAG = 0 //1 when SLOPE P edge detected, goes back to 0 when SLOPE N edge detected
+dim MAX_BLINK_DURATION : MAX_BLINK_DURATION = 750 //Changes SLOPE_FLAG if Slope N has not been detected 
 
 //CALIBRATION MODE GLOBAL VARIABLES 
 DIM Cal_Fail_Count : Cal_Fail_Count = 0 //failure counter.So it dosen't endlessly 'calibrate' if the proximity detection produces false positive/
-DIM CALIBRATION_STATUS : CALIBRATION_STATUS = 1
+DIM CALIBRATION_STATUS : CALIBRATION_STATUS = 1 
 
 //LP MODE GLOBAL VARIABLES
 DIM LP_LAST_BLINK_TIME : LP_LAST_BLINK_TIME = 0 //used in LP MODE to determine last blink time
 DIM TARGET_BLINK_INTERVAL : TARGET_BLINK_INTERVAL = 10000 //in ms, currently set to 10 seconds
 DIM LP_MODE_HOUSEKEEPING_INTERVAL : LP_MODE_HOUSEKEEPING_INTERVAL = 30000 //in ms, every 30 seconds
+
+//HP MODE GLOBAL VARIABLES
+dim START_TIME   //current tick value for delay (ms)
+dim END_TIME     //final tick value for delay   (ms)
+dim ADC_RAW      //latest raw adc sample
+dim HP_LAST_BLINK_TIME : HP_LAST_BLINK_TIME = 0   //tick time of the current blink (ms), if there is one.
 
 //CHANGE MODE STATE GLOBAL VARIABLES 
 DIM CHANGE_MODE_Flag	  //flag to determine button handler function
@@ -248,82 +257,36 @@ sub IO_Config()
     
 endsub 
 
-sub HAPTICS(BYVAL PATTERN_TYPE AS INTEGER)   //input an integer to select the haptic pattern
-	FEEDBACK_COUNT = FEEDBACK_COUNT + 1
-	dim value$ as string
-	rc = BleEncode8(value$,FEEDBACK_COUNT,0)
-	rc = BleCharValueIndicate(hcharHFeedbackCount,value$)
-    SELECT PATTERN_TYPE
 
-        CASE 1     
-            GPIOWRITE(HAPTIC,0)       //HAPTIC is active low!!!!
-            DELAY_MS(200)
-            GPIOWRITE(HAPTIC,1)
-            DELAY_MS(200)
-            GPIOWRITE(HAPTIC,0)
-            DELAY_MS(200)
-            GPIOWRITE(HAPTIC,1)
-            DELAY_MS(400)
-            GPIOWRITE(HAPTIC,0)
-            DELAY_MS(400)
-            GPIOWRITE(HAPTIC,1)
-            PRINT "\n Haptics 1 finished @ "; GETTICKCOUNT()
 
-        CASE 2
-            GPIOWRITE(HAPTIC,0)
-            DELAY_MS(200)
-            GPIOWRITE(HAPTIC,1)
-            DELAY_MS(200)
-            GPIOWRITE(HAPTIC,0)
-            DELAY_MS(400)
-            GPIOWRITE(HAPTIC,1)
-            DELAY_MS(400)
-            GPIOWRITE(HAPTIC,0)
-            DELAY_MS(200)
-            GPIOWRITE(HAPTIC,1)
-            DELAY_MS(200)
-            GPIOWRITE(HAPTIC,0)
-            DELAY_MS(400)
-            GPIOWRITE(HAPTIC,1)
-            PRINT "\n Haptics 2 finished"
+//sub OPTICAL_TX(BYVAL CURRENT_SET_DC AS INTEGER)  //Starts optical TX. Input 0 to turn off. 
 
-            //add cases as required
-                 
-        CASE ELSE     
-            PRINT "\n Not a valid haptics pattern"
+//    dim TX_LIMIT
+//    TX_LIMIT = 50  //absolute maximum //HARDCODE TO MAXIMUM EXPERIMENTAL PWM DUTYCYCLE THAT GIVES MAX ALLOWED CURRENT
 
-    ENDSELECT
+//    if (CURRENT_SET_DC <= TX_LIMIT)&(CURRENT_SET_DC != 0) then
 
-endsub
+//        GPIOWRITE(CURR_SET_PWM,CURRENT_SET_DC)
+//        GPIOWRITE(TX_EN,HIGH)  //enable FE TX opamps + oscilator
+//        PRINT "\n TX ENABLED, DC SET: "; CURRENT_SET_DC
+//		DELAY_MS(32) //LPF for PWM
 
-sub OPTICAL_TX(BYVAL CURRENT_SET_DC AS INTEGER)  //Starts optical TX. Input 0 to turn off. 
+//    elseif (CURRENT_SET_DC > TX_LIMIT)&(CURRENT_SET_DC != 0) then
 
-    dim TX_LIMIT
-    TX_LIMIT = 50  //absolute maximum //HARDCODE TO MAXIMUM EXPERIMENTAL PWM DUTYCYCLE THAT GIVES MAX ALLOWED CURRENT
+//        GPIOWRITE(CURR_SET_PWM,TX_LIMIT)
+//        GPIOWRITE(TX_EN,HIGH)  //enable FE TX opamps + oscilator
+//        PRINT "\n TX_LIMIT DC EXCEDED, set to max: "; TX_LIMIT
+//		DELAY_MS(32) //LPF for PWM
 
-    if (CURRENT_SET_DC <= TX_LIMIT)&(CURRENT_SET_DC != 0) then
+//    elseif CURRENT_SET_DC == 0 then         //turn TX off
 
-        GPIOWRITE(CURR_SET_PWM,CURRENT_SET_DC)
-        GPIOWRITE(TX_EN,HIGH)  //enable FE TX opamps + oscilator
-        PRINT "\n TX ENABLED, DC SET: "; CURRENT_SET_DC
-		DELAY_MS(32) //LPF for PWM
+//        GPIOWRITE(CURR_SET_PWM,0)
+//        GPIOWRITE(TX_EN,LOW)  //disable FE TX opamps + oscilator
+//        PRINT "\n TX SHUTDOWN"
 
-    elseif (CURRENT_SET_DC > TX_LIMIT)&(CURRENT_SET_DC != 0) then
+//    endif
 
-        GPIOWRITE(CURR_SET_PWM,TX_LIMIT)
-        GPIOWRITE(TX_EN,HIGH)  //enable FE TX opamps + oscilator
-        PRINT "\n TX_LIMIT DC EXCEDED, set to max: "; TX_LIMIT
-		DELAY_MS(32) //LPF for PWM
-
-    elseif CURRENT_SET_DC == 0 then         //turn TX off
-
-        GPIOWRITE(CURR_SET_PWM,0)
-        GPIOWRITE(TX_EN,LOW)  //disable FE TX opamps + oscilator
-        PRINT "\n TX SHUTDOWN"
-
-    endif
-
-endsub
+//endsub
 
 sub CANCEL_ALL_TIMERS() //cancels all timers
 	dim i : i = 0
@@ -382,6 +345,7 @@ Sub Create_Char_Current_State()
 	dim unit : unit = 0x2700              //unitless
 	dim namespace : namespace = 0x01      //Bluetooth SIG
 	dim namespacedesc : namespacedesc = 0x0000
+
     //Initialise GATT Server batt read / notify LEDs Characteristic - Read/Write
 	chprop = BLE_CHAR_PROPERTIES_READ | BLE_CHAR_PROPERTIES_INDICATE //replace 0x22
 	rc=BleCharNew(chprop, BleHandleUuidSibling(hBseUuid,(UUID_CURRENT_STATE)), BleAttrMetaData(1,0,2,1,rc2), BleAttrMetaData(1,1,1,1,rc3),0)
@@ -507,6 +471,70 @@ Sub OUTPUT_STATE(BYVAL STATE AS INTEGER)
     
 endsub
 
+sub HAPTICS(BYVAL PATTERN_TYPE AS INTEGER)   //input an integer to select the haptic pattern
+	FEEDBACK_COUNT = FEEDBACK_COUNT + 1
+	dim value$ as string
+	rc = BleEncode8(value$,FEEDBACK_COUNT,0)
+	rc = BleCharValueIndicate(hcharHFeedbackCount,value$)
+    SELECT PATTERN_TYPE
+
+        CASE 1     
+            GPIOWRITE(HAPTIC,0)       //HAPTIC is active low!!!!
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,1)
+            PRINT "\n Haptics 1 finished @ "; GETTICKCOUNT()
+
+        CASE 2
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(400)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(400)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,1)
+            DELAY_MS(200)
+            GPIOWRITE(HAPTIC,0)
+            DELAY_MS(400)
+            GPIOWRITE(HAPTIC,1)
+            PRINT "\n Haptics 2 finished"
+
+            //add cases as required
+                 
+        CASE ELSE     
+            PRINT "\n Not a valid haptics pattern"
+
+    ENDSELECT
+
+endsub
+
+sub CHAR_SLOPE_FLAG_UPDATE() //Sub routine to update Slopes characteristic with value of SLOPE_FLAG
+    dim value$ as string
+	rc = BleEncode8(value$,SLOPE_FLAG,0)
+    if nTxBufs > 0 then
+		rc = BleCharValueIndicate(hcharSlopes,value$)
+        //print "\n updated slope flag \n"
+		nTxBufs = nTxBufs-1
+	endif
+    
+endsub
+
+sub ENABLE_RX_TX() //enable optical RX and TX
+	GPIOWRITE(TX_EN,HIGH)
+	GPIOWRITE(RX_EN,HIGH)
+endsub
+
+sub DISABLE_RX_TX() //disable optical RX and TX
+	GPIOWRITE(TX_EN,LOW)
+	GPIOWRITE(RX_EN,LOW)
+endsub
 
 //FSM STATE ROUTINES--------------------------------------------------------------
 
@@ -521,7 +549,7 @@ sub TURN_OFF_ROUTINE()
 endsub
 
 
-sub LP_MODE_ROUTINE(BYVAL CURRENT_SET_DC AS INTEGER)
+sub LP_MODE_ROUTINE()
 	CANCEL_ALL_TIMERS()
 	OUTPUT_STATE(MODE_LP)
 
@@ -530,42 +558,40 @@ sub LP_MODE_ROUTINE(BYVAL CURRENT_SET_DC AS INTEGER)
 	rc = BleEncode8(value$,FEEDBACK_COUNT,0)
 	rc = BleCharValueIndicate(hcharHFeedbackCount,value$)
 	
-	DELAY_MS(1000)
+	DELAY_MS(2000)
 
 	TimerStart (3,Battery_Check_Interval,1)
 	
 	print "\n LP_MODE state start \n"
 	TimerStart (0,TARGET_BLINK_INTERVAL,1) // Reoccuring BLINK INTERVAL TIMER
 	print "\n started target blink interval timer \n"
-	TimerStart (1,LP_MODE_HOUSEKEEPING_INTERVAL, 1) // Reoccuring housekeeping timer
+	//TimerStart (1,LP_MODE_HOUSEKEEPING_INTERVAL, 1) // Reoccuring housekeeping timer
 	print "\n started housekeeping interval timer \n"
 	
-	OPTICAL_TX(CURRENT_SET_DC) //start TX with desired current
+	ENABLE_RX_TX()
+	//OPTICAL_TX(CURRENT_SET_DC) //start TX with desired current
 	print "\n OPTICAL_TX  FINISH \n"
 endsub 
 
-    dim START_TIME   //current tick value for delay (ms)
-    dim END_TIME     //final tick value for delay   (ms)
-    dim ADC_RAW      //latest raw adc sample
-    dim PREV_BLINK : PREV_BLINK = 0   //tick time of the previously detected blink (ms), first blink is 0.
-    dim CURR_BLINK : CURR_BLINK = 0   //tick time of the current blink (ms), if there is one.
 
-sub HP_MODE_ROUTINE(BYVAL CURRENT_SET_DC AS INTEGER)  
+
+sub HP_MODE_ROUTINE()  //HIGH POWER MODE SETUP ROUTINE
 	CANCEL_ALL_TIMERS()
-	OUTPUT_STATE(MODE_HP)
+	OUTPUT_STATE(MODE_HP) //cancel all existing timers and set CURRENT_STATE to MODE_HP
 
-	FEEDBACK_COUNT = 0 //reset feedback count variable and then send over BLE
+	FEEDBACK_COUNT = 0	//reset feedback count variable and then send over BLE
 	dim value$ as string
 	rc = BleEncode8(value$,FEEDBACK_COUNT,0)
 	rc = BleCharValueIndicate(hcharHFeedbackCount,value$)
 
-	DELAY_MS(1000)
+
+	DELAY_MS(2000)
 
 	
-	
 	print "\n HP_MODE state start \n"
-    OPTICAL_TX(CURRENT_SET_DC) //start TX with desired current
-	print "\n OPTICAL_TX  FINISH \n"
+    //OPTICAL_TX(CURRENT_SET_DC) //start TX with desired current
+	ENABLE_RX_TX()
+	//print "\n OPTICAL_TX  FINISH \n"
     TimerStart (3,Battery_Check_Interval,1)
     TimerStart(4, SAMPLE_INTERVAL,1)
     TimerStart (0,TARGET_BLINK_INTERVAL,1) // Reoccuring BLINK INTERVAL TIMER
@@ -573,15 +599,10 @@ sub HP_MODE_ROUTINE(BYVAL CURRENT_SET_DC AS INTEGER)
 endsub
 
 
-
-
-
-
-
 sub CAL_PASS_ROUTINE()
 	OUTPUT_STATE(CAL_PASS)
 	print" \n CAL_PASS state start \n"
-	LP_MODE_ROUTINE(Current_set_tx_default)
+	LP_MODE_ROUTINE()
 endsub 
 
 
@@ -642,107 +663,118 @@ sub PROXIMITY_DETECT_ROUTINE()
 	CALIBRATION_ROUTINE()
 endsub
 
-function TMR_3_BAT_ADC_HNDL()
-	dim adc: adc = GPIOREAD(BAT_ADC)
-	dim V_BAT as FLOAT: V_BAT = (adc) / (1024*((1/6)/0.6)) * 1000
-    dim V_BAT_MIN : V_BAT_MIN = 0
-    dim V_BAT_MAX : V_BAT_MAX = 2056
-    dim V_BAT_NORMALIZED as FLOAT : V_BAT_NORMALIZED = (V_BAT) / (V_BAT_MAX)*100
-    dim V_BAT_NORMALIZED_INT : V_BAT_NORMALIZED_INT =  ROUND(V_BAT_NORMALIZED)
-    
-   // print "\n V_BAT_NORMALIZED:"; V_BAT_NORMALIZED; "\n"
-   // print "\n V_BAT_NORMALIZED INT:"; V_BAT_NORMALIZED_INT; "\n"
-    
-    IF V_BAT_NORMALIZED_INT > 100 THEN
-        V_BAT_NORMALIZED_INT = 100
-    ELSEIF V_BAT_NORMALIZED_INT < 0 THEN
-        V_BAT_NORMALIZED_INT = 0
-    ENDIF
-	dim value$ as string
-	dim value
-	rc = BleEncode8 (value$,V_BAT_NORMALIZED_INT,0)
-//rc = BleCharCommit(hSvc,value$,hcharBatADC)
-	if nTxBufs > 0 then
-		rc = BleCharValueIndicate(hcharBatADC,value$)
-	//	print "\n ADC value"; adc;"\n"
-    //    print "V_BAT:";V_BAT;"\n"
-	
-      //  dim x
-      //  rc = BleDecodeS8(value$,x,0)
-    //    print "\n V_BAT_NORMALIZE DECODED: "; x; "\n"
-		
-		
-	//	print "\nFree space in ad report: "; BleAdvRptGetSpace(adRpt$); " bytes"
-	//	print "\nFree space in scan report: "; BleAdvRptGetSpace(scnRpt$); " bytes \n"
-		nTxBufs = nTxBufs-1
-	endif
-endfunc 1
 
-sub BLE_CONNECT_ROUTINE()//(BYVAL BLE_TimeOut AS INTEGER)
-	OUTPUT_STATE(BLE_CONNECT)
+
+sub BLE_CONNECT_ROUTINE() //BLE CONNECT FSM STATE ROUTINE
+	OUTPUT_STATE(BLE_CONNECT) //update CURRENT_STATE to BLE_CONNECT and update characteristic
+	DISABLE_RX_TX()
 	CANCEL_ALL_TIMERS()
+
 	rc = BleAdvertStop()
-	rc = BleDisconnect(nCtx)
-	CreateSvc()
+	rc = BleDisconnect(nCtx) //reset timers and disconnect any current connections and advertisements
 	
-	//START_BLE_ADVERT()
-	rc = BleGapSvcInit(dn$, DEVICENAME_WRITABLE,APPEARANCE,MIN_CONN_INTERVAL,MAX_CONN_INTERVAL,CONN_SUP_TIMEOUT ,SLAVE_LATENCY)
+	CreateSvc() //create service
+	
+	rc = BleGapSvcInit(dn$, DEVICENAME_WRITABLE,APPEARANCE,MIN_CONN_INTERVAL,MAX_CONN_INTERVAL,CONN_SUP_TIMEOUT ,SLAVE_LATENCY) //initialize service characteristics
 	print "\n Svc setup \n"
-	MAKE_ADVERT_RPTS()
+	MAKE_ADVERT_RPTS() //create advert reports
 	print "\n Svc setup \n"
-	START_ADVERTISING()
+	START_ADVERTISING() //start advertising allowing device to be connectable
 	print "\n check for adv \n"
 endsub  
 
 
-sub TURN_ON_ROUTINE()
-	GPIOWRITE(BUCK_ON,1) //only for devkit purposes
+sub TURN_ON_ROUTINE() //TURN_ON FSM STATE ROUTINE
+	GPIOWRITE(BUCK_ON,1) 
 	OUTPUT_STATE(TURN_ON)
 	CANCEL_ALL_TIMERS()
+
 	print "\n TURN_ON state start \n"
 	IO_Config() //configure inputs 
-	GPIOWRITE(BUCK_ON,1)
 	
-	IF HW_Debug == 0 THEN
+	IF HW_Debug == 0 THEN //IF HW DEBUG == 0 then go straight to BLE_CONNECT, OTHERWISE GO TO LP_MODE_ROUTINE
 		BLE_CONNECT_ROUTINE()
 	ELSE
-		LP_MODE_ROUTINE(Current_set_tx_default)
+		LP_MODE_ROUTINE()
 	ENDIF
 endsub
 
 //Handlers---------------------------------------------------------------
 
-//STATE HANDLERS
+//STATE and TIMER HANDLERS
 
-function CHANGE_MODE_HNDL()
+function CHANGE_MODE_HNDL() //CHANGE_MODE Button handler, fired after button presses
 
-	dim i : i = GpioRead(PBSTAT)	// Reading input value from button 3
+	dim i : i = GpioRead(PBSTAT)	// Reading input value from PBSTAT
     if i==0 then
 		IF CURRENT_STATE == TURN_OFF THEN //if the  current_state is Off, then TURN_ON routine is called
 			TURN_ON_ROUTINE()
-		ELSEIF CHANGE_MODE_Flag == 0 THEN
-            OPTICAL_TX(0)	
-			CANCEL_ALL_TIMERS()
-			OUTPUT_STATE(CHANGE_MODE)		// set  state to CHANGE_MODE
-			TimerStart(2,15000,0) //change mode timer set to 15 seconds, record all button presses in these 15 seconds
+		ELSEIF CHANGE_MODE_Flag == 0 THEN 
+            //OPTICAL_TX(0)
+			DISABLE_RX_TX()	
+			CANCEL_ALL_TIMERS() 
+			OUTPUT_STATE(CHANGE_MODE)	// set  state to CHANGE_MODE and reset all current timers
+
+			TimerStart(2,15000,0) //change mode timer set to 15 seconds, record all PBSTAT button presses in the next 15 seconds (SEE TMR_2_CM_HNDL)
 			print "\n Change Mode Timer [2] Start - 15 seconds \n"
-			CHANGE_MODE_Flag = 1
+			CHANGE_MODE_Flag = 1 //update change_mode flag, now this button will increase Change_mode_Counter instead
 			print "\n change mode flag is now 1, should now record button presses \n"
 			
-		ELSE
-			CHANGE_MODE_Counter = CHANGE_MODE_Counter + 1
+		ELSE //if Change_mode_flag is 1 then increase counter value which is used in TMR_2 Handler to determine state
+			CHANGE_MODE_Counter = CHANGE_MODE_Counter + 1 
 			print "\n Change Mode Counter: "; CHANGE_MODE_Counter; "\n"
 		ENDIF
-		//print "\n change mode : button 3 pressed"
     elseif i==1 then
-       // print "\n Button 3 released"
     endif
 endfunc 1
 
-function TMR_2_CHANGE_MODE_HNDL()
-	//OPTICAL_TX(0)
+function SLOPE_P_BLINK_HNDL() //ON SLOPE_P rising edge detected
+
+	if (CURRENT_STATE == MODE_LP & ((GETTICKCOUNT() - LP_LAST_BLINK_TIME) > MIN_TIME_BTWN_BLINKS)) THEN //if state is LP and there the minimum time between blinks has been established
+		LP_LAST_BLINK_TIME = GETTICKCOUNT()
+        SLOPE_FLAG = 1 //update slope_flag
+
+		TimerCancel(0) //reset blink interval timer since a blink has been detected
+		TimerStart (0,TARGET_BLINK_INTERVAL,1)
+		TimerStart (1, MAX_BLINK_DURATION,0)
+		print "\n Blink detected Slope P :LP Mode @"; GETTICKCOUNT(); "\n"
+
+	ENDIF
+    if (CURRENT_STATE == MODE_HP & ((GETTICKCOUNT() - HP_LAST_BLINK_TIME) > MIN_TIME_BTWN_BLINKS)) THEN //if state is HP and there the minimum time between blinks has been established
+		HP_LAST_BLINK_TIME = GETTICKCOUNT()
+        SLOPE_FLAG = 1 //update slope_flag
+		TimerCancel(0) //reset blink interval timer
+		TimerStart (0,TARGET_BLINK_INTERVAL,1)
+		TimerStart (1, MAX_BLINK_DURATION,0)
+		print "\n Blink detected Slope P :HP Mode @"; GETTICKCOUNT(); "\n"
+	ENDIF
+    CHAR_SLOPE_FLAG_UPDATE()
+endfunc 1
+
+function SLOPE_N_BLINK_HNDL() //On SLOPE_N Rising edge detected, update SLOPE_FLAG to 0 and update Characteristic value
+    SLOPE_FLAG = 0
+    CHAR_SLOPE_FLAG_UPDATE()
+	TimerCancel(1)
+	print "\n Slope N detected @"; GETTICKCOUNT(); "\n"
+endfunc 1
+
+function TMR_0_BLINK_INTERVAL_EXCEEDED_HNDL() //Blink Interval exceeded Timer then call Haptics
+	//print "\n Blink interval exceeded \n"; GETTICKCOUNT(); "\n"
+	HAPTICS(1)
+endfunc 1
+
+function TMR_1_MAX_BLINK_DURATION_HNDL() //
+	IF CURRENT_STATE == MODE_LP || MODE_HP THEN	
+		SLOPE_FLAG = 0
+		CHAR_SLOPE_FLAG_UPDATE()
+		print "\n MAX BLINK DURATION TIMER FIRED @"; GETTICKCOUNT(); "\n"
+	ENDIF
+endfunc 1
+
+function TMR_2_CHANGE_MODE_HNDL() //Change Mode Timer Handler
 	DIM rc_CM : rc_CM = 1
-	if CHANGE_MODE_Counter == 1 then
+
+	if CHANGE_MODE_Counter == 1 then //depending on change mode counter value (obtained when pressing change mode button PBSTAT), change CURRENT_STATEstate
 		OUTPUT_STATE(TURN_OFF)
 		//rc_CM = 0
 	elseif CHANGE_MODE_Counter == 2 then
@@ -758,200 +790,206 @@ function TMR_2_CHANGE_MODE_HNDL()
 	print " \n Change Mode Counter: "; CHANGE_MODE_Counter
 	print " \n Current State: "; CURRENT_STATE; "\n"
 	
-	CHANGE_MODE_Flag=0
+	CHANGE_MODE_Flag=0 //reset Change mode variables
 	CHANGE_MODE_Counter =0
 	
 	print "\n Change Mode Flag and Counter reset to 0 \n \n"
 	
-	SELECT CURRENT_STATE //select statement here is for debugging purposes, otherwise the routines could be added in if statements above
+	SELECT CURRENT_STATE //fire FSM_STATE routine according to value of Current State
 		CASE TURN_OFF
 			TURN_OFF_ROUTINE()
 		CASE BLE_CONNECT
 			BLE_CONNECT_ROUTINE()
 		CASE MODE_HP
-			HP_MODE_ROUTINE(Current_set_tx_default)
+			HP_MODE_ROUTINE()
 		CASE MODE_LP
-			LP_MODE_ROUTINE(Current_set_tx_default)
+			LP_MODE_ROUTINE()
 		CASE ELSE
 			TURN_OFF_ROUTINE()
 	ENDSELECT
+
 endfunc rc_CM
 
-function TMR_1_HOUSEKEEPING_HNDL() //housekeeping timer in LP Mode
-	IF CURRENT_STATE == MODE_LP THEN	
-		print "\n Housekeeping Timer expired\n"
-	ENDIF
-endfunc 1
+function TMR_3_BAT_ADC_HNDL() //Read Battery ADC Timer
+	dim adc: adc = GPIOREAD(BAT_ADC) //obtain raw adc value from BAT_ADC pin
+	dim V_BAT as FLOAT: V_BAT = (adc) / (1024*((1/6)/0.6)) * 1000 //Use value and characteristics of that battery adc to convert to V
 
-function TMR_0_BLINK_INTERVAL_EXCEEDED_HNDL() //Blink Interval exceeded Timer in LP mode
+    dim V_BAT_MIN : V_BAT_MIN = 0 //minimum value V_Bat can be 
+    dim V_BAT_MAX : V_BAT_MAX = 2056 //maximum value V_Bat can be
+    dim V_BAT_NORMALIZED as FLOAT : V_BAT_NORMALIZED = (V_BAT) / (V_BAT_MAX)*100 //normalize V_BAT and multiply 
+    dim V_BAT_NORMALIZED_INT : V_BAT_NORMALIZED_INT =  ROUND(V_BAT_NORMALIZED)
+    
+   // print "\n V_BAT_NORMALIZED:"; V_BAT_NORMALIZED; "\n"
+   // print "\n V_BAT_NORMALIZED INT:"; V_BAT_NORMALIZED_INT; "\n"
+    
+    IF V_BAT_NORMALIZED_INT > 100 THEN
+        V_BAT_NORMALIZED_INT = 100
+    ELSEIF V_BAT_NORMALIZED_INT < 0 THEN
+        V_BAT_NORMALIZED_INT = 0
+    ENDIF
 
-		//print "\n Blink interval exceeded \n"; GETTICKCOUNT(); "\n"
-		HAPTICS(1)
 
-endfunc 1
 
-sub CHAR_SLOPE_FLAG_UPDATE()
-    dim value$ as string
-	rc = BleEncode8(value$,SLOPE_FLAG,0)
+	dim value$ as string //encode normalize V_BAT into value$ and then send value$ to be value of battery ADC
+	dim value
+	rc = BleEncode8 (value$,V_BAT_NORMALIZED_INT,0)
+    
     if nTxBufs > 0 then
-		rc = BleCharValueIndicate(hcharSlopes,value$)
-        print "\n updated slope flag \n"
+		rc = BleCharValueIndicate(hcharBatADC,value$)
+	//	print "\n ADC value"; adc;"\n"
+    //    print "V_BAT:";V_BAT;"\n"
+	
+      //  dim x
+      //  rc = BleDecodeS8(value$,x,0)
+    //    print "\n V_BAT_NORMALIZE DECODED: "; x; "\n"
+		
+		
+	//	print "\nFree space in ad report: "; BleAdvRptGetSpace(adRpt$); " bytes"
+	//	print "\nFree space in scan report: "; BleAdvRptGetSpace(scnRpt$); " bytes \n"
 		nTxBufs = nTxBufs-1
 	endif
-
-//	    rc = BleCharValueIndicate(hcharSlopes,value$)
-    
-endsub
-
-function SLOPE_P_BLINK_HNDL() //Blink Detected on Slope P
-
-	if (CURRENT_STATE == MODE_LP & ((GETTICKCOUNT() - LP_LAST_BLINK_TIME) > MIN_TIME_BTWN_BLINKS)) THEN
-		LP_LAST_BLINK_TIME = GETTICKCOUNT()
-        SLOPE_FLAG = 1
-		TimerCancel(0) //reset blink interval timer
-		TimerStart (0,TARGET_BLINK_INTERVAL,1)
-		print "\n Blink detected LP Mode \n"
-	ENDIF
-    if (CURRENT_STATE == MODE_HP & ((GETTICKCOUNT() - CURR_BLINK) > MIN_TIME_BTWN_BLINKS)) THEN
-		CURR_BLINK = GETTICKCOUNT()
-        SLOPE_FLAG = 1
-		TimerCancel(0) //reset blink interval timer
-		TimerStart (0,TARGET_BLINK_INTERVAL,1)
-		print "\n Blink detected HP Mode \n"
-	ENDIF
-    CHAR_SLOPE_FLAG_UPDATE()
 endfunc 1
 
-function SLOPE_N_BLINK_HNDL() //Slope N deteccted
-    SLOPE_FLAG = 0
-    CHAR_SLOPE_FLAG_UPDATE()
-endfunc 1
+function TMR_4_HNDLR_HP_MODE_ENV_ADC() //On Timer interval (10ms) read ENV_ADC SIO pin, encode, and then send value to EnvADC Characteristic
 
-function TMR_4_HNDLR_HP_MODE_ENV_ADC()
-	ADC_RAW = GPIOREAD(ENV_ADC)  //Get one sample
+	ADC_RAW = GPIOREAD(ENV_ADC)  
     dim value$ as string
 	rc = BleEncode16(value$,ADC_RAW,0)
     	if nTxBufs > 0 then
 		rc = BleCharValueIndicate(hcharEnvADC,value$)
 		nTxBufs = nTxBufs-1
 	endif
-   // print "\n ENV ADC: "; BleDecodeS16(value$); "\n"
-    //convert current ADC_RAW sample to mV and add to array or circular buffer?
 endfunc 1
 
 
 //BLUETOOTH HANDLERS---------------------------------------------------
 
-function HNDLRBLEADVTIMEOUT()
-	print "\n Advert stopped from timeout"
+function HNDLRBLEADVTIMEOUT()   //If advertising interval expires, stop advertising
+	print "\n Advert stopped from timeout" 
 	print "\n Exiting..."
-	//more advanced switches depending on timeout to be included
-//	rc = BleDisconnect()
 	rc = BleAdvertStop()
 	
-endfunc 1 //check if this should be 0
+endfunc 1 
 
-Function HndlrBleMsg(ByVal nMsgId, ByVal connHndl)
-    if nMsgID==BLE_EVBLEMSGID_DISCONNECT then
+Function HndlrBleMsg(ByVal nMsgId, ByVal connHndl) //called whenever BLE connect or disconnect
+    if nMsgID==BLE_EVBLEMSGID_DISCONNECT then //if disconnect then HNDLRDiscon will be called, this simply prints a message to the console
         print "\n\n-- Disconnected from client\n"
 
 		
-    elseif nMsgID==BLE_EVBLEMSGID_CONNECT then
+    elseif nMsgID==BLE_EVBLEMSGID_CONNECT then //upon connection begin next state in state machine: Proximity Detect
         print "\n-- Connected to client"
 		PROXIMITY_DETECT_ROUTINE()
 		nCtx = connHndl
     endif
 EndFunc 1
 
-Function HndlrDiscon(hConn, rsn)
+Function HndlrDiscon(hConn, rsn) //upon BLE disconnection, cancel all existing timers, return to advertising state
 	CANCEL_ALL_TIMERS()
-    START_ADVERTISING()
-	print "\n new advert"
+    START_ADVERTISING() //BLE_CONNECT_ROUTINE() ? 
 EndFunc 1
 
 Function HndlrCharHvc(hChar)
     nTxBufs = nTxBufs + 1
 EndFunc 1
 
-
-
-
-Function HndlrCccd(charHndl, val)  //WIP --- NEED TO ACCOUNT FOR OTHER CHARACTERS HANDELS (I THINK THIS IS USELESS ACTUALLY) 
-    if charHndl == hcharBatADC then
+Function HndlrCccd(charHndl, val)  
+    if charHndl == hcharBatADC then //if returned characteristic desciptor: CCCD is value two then indicate to console that it has been enabled
         print "\n CCCD:";val
         if val==2 then
-           // rc=GpioBindEvent(0,GPIO_BTN0,2)         //Binds a gpio transition high or low on button 0 (SIO16) to event 0
             AssertRC(rc,309)
-          //  rc=GpioBindEvent(1,GPIO_BTN1,2)         //Binds a gpio transition high or low on button 1 (SIO17) to event 1
             AssertRC(rc,311)
             print "\n Indications enabled"
             nTxBufs = nTxBufs + 1
         else
-          //  rc=GpioUnbindEvent(0)
-           // rc=GpioUnbindEvent(1)
             print "\n Indications disabled"
         endif
-    endif
-        if charHndl == hcharEnvADC then
+    
+    elseif charHndl == hcharEnvADC then
         print "\n CCCD:";val
         if val==2 then
-           // rc=GpioBindEvent(0,GPIO_BTN0,2)         //Binds a gpio transition high or low on button 0 (SIO16) to event 0
             AssertRC(rc,309)
-          //  rc=GpioBindEvent(1,GPIO_BTN1,2)         //Binds a gpio transition high or low on button 1 (SIO17) to event 1
             AssertRC(rc,311)
             print "\n Indications enabled"
             nTxBufs = nTxBufs + 1
         else
-          //  rc=GpioUnbindEvent(0)
-           // rc=GpioUnbindEvent(1)
             print "\n Indications disabled"
         endif
-    endif
-	  if charHndl == hcharCurrentState then
+    
+	elseif charHndl == hcharCurrentState then
         print "\n CCCD:";val
         if val==2 then
-           // rc=GpioBindEvent(0,GPIO_BTN0,2)         //Binds a gpio transition high or low on button 0 (SIO16) to event 0
             AssertRC(rc,309)
-          //  rc=GpioBindEvent(1,GPIO_BTN1,2)         //Binds a gpio transition high or low on button 1 (SIO17) to event 1
             AssertRC(rc,311)
             print "\n Indications enabled"
             nTxBufs = nTxBufs + 1
         else
-          //  rc=GpioUnbindEvent(0)
-           // rc=GpioUnbindEvent(1)
+            print "\n Indications disabled"
+        endif
+    
+    elseif charHndl == hcharHFeedbackCount then
+        print "\n CCCD:";val
+        if val==2 then
+            AssertRC(rc,309)
+            AssertRC(rc,311)
+            print "\n Indications enabled"
+            nTxBufs = nTxBufs + 1
+        else
+            print "\n Indications disabled"
+        endif
+    
+    elseif charHndl == hcharSlopes then
+        print "\n CCCD:";val
+        if val==2 then
+            AssertRC(rc,309)
+            AssertRC(rc,311)
+            print "\n Indications enabled"
+            nTxBufs = nTxBufs + 1
+        else
+            print "\n Indications disabled"
+        endif
+    
+    elseif charHndl == hcharTargetInterval then
+        print "\n CCCD:";val
+        if val==2 then
+            AssertRC(rc,309)
+            AssertRC(rc,311)
+            print "\n Indications enabled"
+            nTxBufs = nTxBufs + 1
+        else
             print "\n Indications disabled"
         endif
     endif
 EndFunc 1
 
-Function HndlrTargetTimeInterval(charHndl, offset, len)  
-    dim i,s$
-	dim value
-    //Get characteristic value
-    rc=BleCharValueRead(charHndl, s$)
-    print "\nNew value received from client:";s$
+Function HndlrTargetTimeInterval(charHndl, offset, len)   //receive Target_Blink_Interval Characteristic from Client and overwrite default of 10000
+    dim data$ //data from characteristic (in hex)
+	dim value //Integer variable
 
-    //write values to LEDs
-	rc = BleDecodeU16(s$,value,0)
+    rc=BleCharValueRead(charHndl, data$) //read characteristic from client
+    print "\nNew value received from client:";data$
+	
+    rc = BleDecodeU16(data$,value,0) //decodes data$ and puts result into value. Set TARGET_BLINK_INTERVAL variable to value 
     TARGET_BLINK_INTERVAL = value
-	IF TARGET_BLINK_INTERVAL > 30000 THEN
+
+	IF TARGET_BLINK_INTERVAL > 30000 THEN //limit TARGET_BLINK_INTERVAL to be within 5 seconds or 30 seconds
 		//print "exceed target blink interval, set to 30000 \n"
 		TARGET_BLINK_INTERVAL = 30000
 	ELSEIF TARGET_BLINK_INTERVAL < 5000 THEN
 		//print "\n Target blink interval too low, set to 5000 \n"
 		TARGET_BLINK_INTERVAL = 5000
 	ENDIF
+
 	//print "\n S$:"; BleDecodeU16(s$,value,0); "\n"
 	//print "\n NEW VALUE FOR TARGEET BLINK ITNERVAL: "; value; "\n"
-	print "actual Target Blink Interval Found: "; TARGET_BLINK_INTERVAL; "\n"
-	IF CURRENT_STATE == MODE_HP || CURRENT_STATE == MODE_LP THEN
+	//print "actual Target Blink Interval Found: "; TARGET_BLINK_INTERVAL; "\n"
+	
+    IF CURRENT_STATE == MODE_HP || CURRENT_STATE == MODE_LP THEN //If currently in an operating mode when characteristic value is read, reset Blink Interval Timer (Timer 0)
 	TimerCancel(0)
 	TimerStart(0,TARGET_BLINK_INTERVAL,1)
-	//print "\n timer updated \n"
 	ENDIF
-	//GpioWrite(GPIO_LED0,StrGetChr(s$,0))
-   // GpioWrite(GPIO_LED1,StrGetChr(s$,1))
-EndFunc 1//useless
+
+EndFunc 1
+
 
 
 //Main Program-----------------------------------------------------------
@@ -976,12 +1014,8 @@ onevent EVTMR2 				CALL TMR_2_CHANGE_MODE_HNDL  //Timer 2 which is associated wi
 onevent EVTMR3 				call TMR_3_BAT_ADC_HNDL
 onevent EVTMR4              call TMR_4_HNDLR_HP_MODE_ENV_ADC
 
-
-
-
-
 TURN_ON_ROUTINE()
 
 print "\n waitevent \n"
 WAITEVENT 
-print "\n after final waitevent, now in interactive mode \n"
+

@@ -658,6 +658,7 @@ sub TURN_ON_ROUTINE() //TURN_ON FSM STATE ROUTINE
 	GPIOWRITE(BUCK_ON,1) 
 	OUTPUT_STATE(TURN_ON)
 	CANCEL_ALL_TIMERS()
+	rc = BleTxPowerSet(-8)
 
 	print "\n TURN_ON state start \n"
 	IO_Config() //configure inputs 
@@ -705,7 +706,7 @@ function SLOPE_P_BLINK_HNDL() //ON SLOPE_P rising edge detected
 	//HP_LAST_BLINK_TIME = GETTICKCOUNT()
 	//FIRST_BLINK_FLAG = 0
 	//ENDIF
-	if (CURRENT_STATE == MODE_LP & ((GETTICKCOUNT() - LP_LAST_BLINK_TIME) > MIN_TIME_BTWN_BLINKS)) THEN //if state is LP and there the minimum time between blinks has been established
+	if (CURRENT_STATE == MODE_LP && ((GETTICKCOUNT() - LP_LAST_BLINK_TIME) > MIN_TIME_BTWN_BLINKS)) THEN //if state is LP and there the minimum time between blinks has been established
 		LP_LAST_BLINK_TIME = GETTICKCOUNT()
         SLOPE_FLAG = 1 //update slope_flag
 		CHAR_SLOPE_FLAG_UPDATE()
@@ -713,19 +714,19 @@ function SLOPE_P_BLINK_HNDL() //ON SLOPE_P rising edge detected
 		TimerCancel(0) //reset blink interval timer since a blink has been detected
 		TimerStart (0,TARGET_BLINK_INTERVAL,1)
 		TimerStart (1, MAX_BLINK_DURATION,0)
-		print "\n Blink detected Slope P :LP Mode @"; GETTICKCOUNT(); "\n"
+	//	print "\n Blink detected Slope P :LP Mode @"; GETTICKCOUNT(); "\n"
 		
 
 	ENDIF
-    if (CURRENT_STATE == MODE_HP & ((GETTICKCOUNT() - HP_LAST_BLINK_TIME) > MIN_TIME_BTWN_BLINKS)) THEN //if state is HP and there the minimum time between blinks has been established
+    if (CURRENT_STATE == MODE_HP && ((GETTICKCOUNT() - HP_LAST_BLINK_TIME) > MIN_TIME_BTWN_BLINKS)) THEN //if state is HP and there the minimum time between blinks has been established
 		HP_LAST_BLINK_TIME = GETTICKCOUNT()
         SLOPE_FLAG = 1 //update slope_flag
 		CHAR_SLOPE_FLAG_UPDATE()
-		print "\n SLOPEFLAG:";SLOPE_FLAG;"\n"
+	//	print "\n SLOPEFLAG:";SLOPE_FLAG;"\n"
 		TimerCancel(0) //reset blink interval timer
 		TimerStart (0,TARGET_BLINK_INTERVAL,1)
 		TimerStart (1, MAX_BLINK_DURATION,0)
-		print "\n Blink detected Slope P :HP Mode @"; GETTICKCOUNT(); "\n"
+	//	print "\n Blink detected Slope P :HP Mode @"; GETTICKCOUNT(); "\n"
 		
 	ENDIF
 
@@ -798,7 +799,7 @@ endfunc rc_CM
 
 function TMR_3_BAT_ADC_HNDL() //Read Battery ADC Timer
 	dim adc: adc = GPIOREAD(BAT_ADC) //obtain raw adc value from BAT_ADC pin
-	//dim V_BAT as FLOAT: V_BAT = (adc) / (256*((0.25)/0.6)) * 2*1000 //Use value and characteristics of that battery adc to convert to V
+	//dim V_BAT as FLOAT: V_BAT = (adc) / (4096*((0.25)/0.6))     *2*1000 //Use value and characteristics of that battery adc to convert to V
 
    // dim V_BAT_MIN : V_BAT_MIN = 3600 //minimum value V_Bat can be 
    // dim V_BAT_MAX : V_BAT_MAX = 4200 //maximum value V_Bat can be
@@ -826,9 +827,9 @@ function TMR_3_BAT_ADC_HNDL() //Read Battery ADC Timer
 	dim value
 	rc = BleEncode16 (value$,adc,0)
     
-    if nTxBufs > 0 then
-		rc = BleCharValueNotify(hcharBatADC,value$)
-		//print "\n ADC value"; adc;"\n"
+    //if nTxBufs > 0 then
+	rc = BleCharValueNotify(hcharBatADC,value$)
+	//	print "\n ADC value"; adc;"\n"
        // print "V_BAT:";V_BAT_INT;"\n"
 		//value = BleDecodeU16(value$, value, 0)
 		//print "value: "; value; "\n"
@@ -841,19 +842,19 @@ function TMR_3_BAT_ADC_HNDL() //Read Battery ADC Timer
 		
 	//	print "\nFree space in ad report: "; BleAdvRptGetSpace(adRpt$); " bytes"
 	//	print "\nFree space in scan report: "; BleAdvRptGetSpace(scnRpt$); " bytes \n"
-		nTxBufs = nTxBufs-1
-	endif
+//		nTxBufs = nTxBufs-1
+//	endif
 endfunc 1
 
 function TMR_4_HNDLR_HP_MODE_ENV_ADC() //On Timer interval (10ms) read ENV_ADC SIO pin, encode, and then send value to EnvADC Characteristic
 
 	ADC_RAW = GPIOREAD(ENV_ADC)  
     dim value$ as string
-	rc = BleEncode8(value$,ADC_RAW,0)
-    if nTxBufs > 0 then
-		rc = BleCharValueNotify(hcharEnvADC,value$)
-		nTxBufs = nTxBufs-1
-	endif
+	rc = BleEncode16(value$,ADC_RAW,0)
+    //if nTxBufs > 0 then
+	rc = BleCharValueNotify(hcharEnvADC,value$)
+	//	nTxBufs = nTxBufs-1
+//	endif
 endfunc 1
 
 
